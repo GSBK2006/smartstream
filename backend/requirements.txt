@@ -1,0 +1,8 @@
+flask
+flask-cors
+supabase
+requests
+google-generativeai
+openai
+anthropic
+python-dotenv

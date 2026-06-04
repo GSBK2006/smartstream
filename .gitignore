@@ -1,0 +1,26 @@
+# Environment variables (credentials)
+.env
+.env.local
+
+# Python caches & build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+backend/data/
+
+# Node dependencies & production builds
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# SQLite databases
+*.db
+*.sqlite
+
+# IDEs & System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

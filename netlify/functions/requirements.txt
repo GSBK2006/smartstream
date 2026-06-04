@@ -1,0 +1,6 @@
+supabase
+requests
+google-generativeai
+openai
+anthropic
+python-dotenv
