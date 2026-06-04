@@ -9,8 +9,12 @@ try:
 except ImportError:
     pass
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# Default fallbacks for easy Netlify zero-config deployment
+DEFAULT_URL = "https://fmhbqtbohyrhiyhthpmv.supabase.co"
+DEFAULT_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZtaGJxdGJvaHlyaGl5aHRocG12Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1NzQwNTMsImV4cCI6MjA5NjE1MDA1M30.73NwxImAzCNk5JFbhNntMBxh3dpubi_1TDyHxIfJYjY"
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or DEFAULT_URL
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or DEFAULT_KEY
 
 _supabase = None
 
@@ -20,10 +24,8 @@ def get_supabase() -> Client:
     """
     global _supabase
     if _supabase is None:
-        url = os.environ.get("SUPABASE_URL")
-        key = os.environ.get("SUPABASE_KEY")
-        if not url or not key:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables must be set.")
+        url = os.environ.get("SUPABASE_URL") or DEFAULT_URL
+        key = os.environ.get("SUPABASE_KEY") or DEFAULT_KEY
         _supabase = create_client(url, key)
     return _supabase
 
