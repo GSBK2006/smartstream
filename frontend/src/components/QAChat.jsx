@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, MessageSquare, AlertCircle, Sparkles } from 'lucide-react';
+import { answerDatasetQuestion } from '../utils/nlpEngine';
 
 export default function QAChat({ report, presetId, backendUrl, llmSettings, username }) {
   const [messages, setMessages] = useState([]);
@@ -71,31 +72,22 @@ export default function QAChat({ report, presetId, backendUrl, llmSettings, user
     setLoading(true);
 
     try {
-      const res = await fetch(`${backendUrl}/api/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username,
-          question: question,
-          chat_history: messages.map(m => ({ role: m.role, text: m.text })),
-          provider: llmSettings.provider,
-          model_name: llmSettings.modelName,
-          api_key: llmSettings.apiKey
-        })
-      });
+      const answer = await answerDatasetQuestion(
+        report.data,
+        question,
+        messages.map(m => ({ role: m.role, text: m.text })),
+        llmSettings.provider,
+        llmSettings.modelName,
+        llmSettings.apiKey
+      );
 
-      const data = await res.json();
-      if (res.ok) {
-        setMessages(prev => [...prev, {
-          role: 'bot',
-          text: data.answer,
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        }]);
-      } else {
-        setError(data.error || "Failed to process question");
-      }
+      setMessages(prev => [...prev, {
+        role: 'bot',
+        text: answer,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      }]);
     } catch (err) {
-      setError("Network error connecting to Q&A database parser.");
+      setError("Failed to process question: " + err.message);
     } finally {
       setLoading(false);
     }

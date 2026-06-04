@@ -1,5 +1,107 @@
 import React, { useState } from 'react';
 import { Upload, ShieldCheck, AlertCircle } from 'lucide-react';
+import { saveStagedData } from '../utils/supabaseClient';
+import { cleanAndProcessData } from '../utils/pipeline';
+
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/);
+  if (lines.length === 0) return [];
+  
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^["']|["']$/g, ''));
+  const records = [];
+  
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    
+    const values = [];
+    let insideQuote = false;
+    let currentVal = "";
+    
+    for (let c = 0; c < line.length; c++) {
+      const char = line[c];
+      if (char === '"' || char === "'") {
+        insideQuote = !insideQuote;
+      } else if (char === ',' && !insideQuote) {
+        values.push(currentVal.trim());
+        currentVal = "";
+      } else {
+        currentVal += char;
+      }
+    }
+    values.push(currentVal.trim());
+    
+    const record = {};
+    for (let h = 0; h < headers.length; h++) {
+      let val = values[h] !== undefined ? values[h].replace(/^["']|["']$/g, '') : "";
+      record[headers[h]] = val;
+    }
+    records.push(record);
+  }
+  return records;
+}
+
+function getRawStats(records) {
+  if (!records || records.length === 0) {
+    return {
+      row_count: 0,
+      column_count: 0,
+      duplicates: 0,
+      nulls: {},
+      dtypes: {},
+      columns: [],
+      sample: []
+    };
+  }
+  
+  const columns = Object.keys(records[0]);
+  const seen = new Set();
+  let duplicates = 0;
+  for (const r of records) {
+    const serialized = Object.keys(r).sort().map(k => `${k}:${r[k]}`).join('|');
+    if (seen.has(serialized)) {
+      duplicates++;
+    } else {
+      seen.add(serialized);
+    }
+  }
+  
+  const nulls = {};
+  for (const col of columns) nulls[col] = 0;
+  for (const r of records) {
+    for (const col of columns) {
+      const val = r[col];
+      if (val === undefined || val === null || String(val).trim() === "" || String(val).toLowerCase() === "nan" || String(val).toLowerCase() === "null") {
+        nulls[col]++;
+      }
+    }
+  }
+  
+  const dtypes = {};
+  for (const col of columns) {
+    let isNum = true;
+    for (const r of records) {
+      const val = r[col];
+      if (val !== undefined && val !== null && String(val).trim() !== "") {
+        if (isNaN(Number(val))) {
+          isNum = false;
+          break;
+        }
+      }
+    }
+    dtypes[col] = isNum ? 'float64' : 'object';
+  }
+  
+  return {
+    row_count: records.length,
+    column_count: columns.length,
+    duplicates,
+    nulls,
+    dtypes,
+    columns,
+    sample: records.slice(0, 15)
+  };
+}
 
 export default function DatasetComparator({ backendUrl, username }) {
   const [fileA, setFileA] = useState(null);
@@ -9,6 +111,9 @@ export default function DatasetComparator({ backendUrl, username }) {
   const [reportA, setReportA] = useState(null);
   const [reportB, setReportB] = useState(null);
   
+  const [recordsA, setRecordsA] = useState(null);
+  const [recordsB, setRecordsB] = useState(null);
+  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [status, setStatus] = useState('idle'); // 'idle' | 'staged' | 'compared'
@@ -17,60 +122,68 @@ export default function DatasetComparator({ backendUrl, username }) {
     if (!file) return;
     setError(null);
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('target', target);
-    formData.append('username', username);
-
-    try {
-      if (target === 'A') {
-        setFileA(file);
-        setStatsA(null);
-      } else {
-        setFileB(file);
-        setStatsB(null);
-      }
-
-      const res = await fetch(`${backendUrl}/api/upload-raw`, {
-        method: 'POST',
-        body: formData
-      });
-      const data = await res.json();
-      if (res.ok) {
-        if (target === 'A') {
-          setStatsA(data.stats);
-        } else {
-          setStatsB(data.stats);
-        }
-        setStatus('staged');
-      } else {
-        setError(data.error || `Failed to upload dataset ${target}`);
-      }
-    } catch (err) {
-      setError("Connection to backend server failed.");
+    if (target === 'A') {
+      setFileA(file);
+      setStatsA(null);
+      setRecordsA(null);
+    } else {
+      setFileB(file);
+      setStatsB(null);
+      setRecordsB(null);
     }
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const text = e.target.result;
+        let records = [];
+        if (file.name.endsWith('.json')) {
+          const parsed = JSON.parse(text);
+          records = Array.isArray(parsed) ? parsed : [parsed];
+        } else {
+          records = parseCSV(text);
+        }
+        
+        const stats = getRawStats(records);
+        
+        if (target === 'A') {
+          setStatsA(stats);
+          setRecordsA(records);
+        } else {
+          setStatsB(stats);
+          setRecordsB(records);
+        }
+        
+        // Stage to database
+        await saveStagedData(username, target, records, stats, null, null);
+        setStatus('staged');
+      } catch (err) {
+        setError(`Failed to parse ${file.name}: ${err.message}`);
+      }
+    };
+    
+    reader.readAsText(file);
   };
 
   const handleCompare = async () => {
-    if (!statsA || !statsB) return;
+    if (!statsA || !statsB || !recordsA || !recordsB) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${backendUrl}/api/process`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setReportA(data.reportA);
-        setReportB(data.reportB);
-        setStatus('compared');
-      } else {
-        setError(data.error || "Processing failed");
-      }
+      // Run processing on both datasets in memory
+      const resA = cleanAndProcessData(recordsA);
+      const resB = cleanAndProcessData(recordsB);
+      
+      setReportA(resA.report);
+      setReportB(resB.report);
+      
+      // Save both results to database archive
+      await saveStagedData(username, 'A', recordsA, statsA, resA.cleaned, resA.report);
+      await saveStagedData(username, 'B', recordsB, statsB, resB.cleaned, resB.report);
+      
+      setStatus('compared');
     } catch (err) {
-      setError("Pipeline process call failed.");
+      setError("Pipeline comparison failed.");
     } finally {
       setLoading(false);
     }

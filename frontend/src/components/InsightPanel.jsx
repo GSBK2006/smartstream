@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Lightbulb, RefreshCw, AlertCircle } from 'lucide-react';
+import { getPipelineSummary } from '../utils/nlpEngine';
 
 export default function InsightPanel({ report, backendUrl, llmSettings, username }) {
   const [summary, setSummary] = useState('');
@@ -18,24 +19,16 @@ export default function InsightPanel({ report, backendUrl, llmSettings, username
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${backendUrl}/api/summary`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username,
-          provider: llmSettings.provider,
-          model_name: llmSettings.modelName,
-          api_key: llmSettings.apiKey
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSummary(data.summary);
-      } else {
-        setError(data.error || "Failed to generate report");
-      }
+      const summaryText = await getPipelineSummary(
+        report.data,
+        report.stats.anomaly_count,
+        llmSettings.provider,
+        llmSettings.modelName,
+        llmSettings.apiKey
+      );
+      setSummary(summaryText);
     } catch (err) {
-      setError("Unable to connect to backend engine.");
+      setError("Unable to generate summary: " + err.message);
     } finally {
       setLoading(false);
     }

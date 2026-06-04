@@ -9,6 +9,9 @@ import QAChat from './components/QAChat';
 import LoginPage from './components/LoginPage';
 import DatasetComparator from './components/DatasetComparator';
 
+import { clearStagedData, getStagedData, saveStagedData } from './utils/supabaseClient';
+import { cleanAndProcessData } from './utils/pipeline';
+
 export default function App() {
   const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 
     (window.location.port === '5173' || window.location.port === '5174' || window.location.port === '5175'
@@ -83,11 +86,7 @@ export default function App() {
     setReport(null);
     setPipelineStatus('idle');
     try {
-      await fetch(`${BACKEND_URL}/api/reset-dual`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: currentUser.username })
-      });
+      await clearStagedData(currentUser.username);
     } catch (e) {
       console.error(e);
     }
@@ -96,26 +95,64 @@ export default function App() {
   const handleProcessData = async () => {
     setProcessing(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/process`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: currentUser.username })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        if (data.reportA) {
-          setReport(data.reportA);
-          setPipelineStatus('cleaned');
-          setDownloadTimestamp(Date.now());
-        }
-      } else {
-        alert(data.error || "Failed to process staged data");
+      const stagedA = await getStagedData(currentUser.username, 'A');
+      if (!stagedA || !stagedA.raw_data) {
+        alert("No raw data staged for processing");
+        return;
       }
+      
+      const resultA = cleanAndProcessData(stagedA.raw_data);
+      
+      await saveStagedData(
+        currentUser.username,
+        'A',
+        stagedA.raw_data,
+        stagedA.raw_stats,
+        resultA.cleaned,
+        resultA.report
+      );
+      
+      setReport(resultA.report);
+      setPipelineStatus('cleaned');
+      setDownloadTimestamp(Date.now());
     } catch (err) {
-      alert("Error connecting to backend execution pipeline.");
+      alert("Error processing pipeline locally: " + err.message);
     } finally {
       setProcessing(false);
     }
+  };
+
+  const handleDownloadCleaned = (target) => {
+    if (!report || !report.data) return;
+    
+    const cleanedRecords = report.data.map(r => {
+      const copy = { ...r };
+      delete copy.anomaly_reason;
+      return copy;
+    });
+    
+    if (cleanedRecords.length === 0) return;
+    
+    const headers = Object.keys(cleanedRecords[0]);
+    const csvRows = [headers.join(',')];
+    
+    for (const r of cleanedRecords) {
+      const values = headers.map(h => {
+        const val = r[h] !== null && r[h] !== undefined ? String(r[h]) : "";
+        return val.includes(',') ? `"${val}"` : val;
+      });
+      csvRows.push(values.join(','));
+    }
+    
+    const csvContent = csvRows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `smartstream_cleaned_data_${target}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const saveSettings = (newSettings) => {
@@ -212,21 +249,20 @@ export default function App() {
 
           {/* Download Cleaned CSV Button - Text Only */}
           {activePage === 'dashboard' && pipelineStatus === 'cleaned' && report && (
-            <a 
-              href={`${BACKEND_URL}/api/download-cleaned?target=A&username=${currentUser.username}&t=${downloadTimestamp}`}
-              download
+            <button 
+              onClick={() => handleDownloadCleaned('A')}
               className="btn btn-primary animate-fade-in"
               style={{
-                textDecoration: 'none',
                 padding: '0.4rem 0.85rem',
                 fontSize: '0.75rem',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '0.3rem'
+                gap: '0.3rem',
+                cursor: 'pointer'
               }}
             >
               Export Clean CSV
-            </a>
+            </button>
           )}
 
           {/* Theme Toggle Button - Text Only */}

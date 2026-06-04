@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { LockKeyhole, User, ShieldCheck, AlertCircle } from 'lucide-react';
+import { registerUser, verifyUser } from '../utils/supabaseClient';
 
 export default function LoginPage({ onLoginSuccess, backendUrl }) {
   const [isRegister, setIsRegister] = useState(false);
@@ -15,25 +16,23 @@ export default function LoginPage({ onLoginSuccess, backendUrl }) {
     setSuccess(null);
     setLoading(true);
 
-    const endpoint = isRegister ? '/api/register' : '/api/login';
     try {
-      const res = await fetch(`${backendUrl}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-      const data = await res.json();
-      
-      if (res.ok) {
-        if (isRegister) {
+      if (isRegister) {
+        const res = await registerUser(username, password);
+        if (res.success) {
           setSuccess("Account created! You can now log in.");
           setIsRegister(false);
           setPassword('');
         } else {
-          onLoginSuccess(data.user);
+          setError(res.message);
         }
       } else {
-        setError(data.error || "Authentication failed.");
+        const res = await verifyUser(username, password);
+        if (res.success) {
+          onLoginSuccess(res.user);
+        } else {
+          setError(res.message);
+        }
       }
     } catch (err) {
       setError("Unable to connect to authorization server.");
