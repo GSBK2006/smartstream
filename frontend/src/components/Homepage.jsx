@@ -3,7 +3,6 @@ import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Responsi
 import { Activity, ShieldCheck, Database, Award, Info } from 'lucide-react';
 
 export default function Homepage({ report, onNavigate, username }) {
-  const [hoveredCell, setHoveredCell] = useState(null);
 
   // Compute metrics dynamically from processed report
   const fingerprintData = useMemo(() => {
@@ -139,40 +138,6 @@ export default function Homepage({ report, onNavigate, username }) {
       mockSequencer: false
     };
   }, [report]);
-
-  // Generate sequence boxes representing the row-by-row state of the columns
-  const dnaSequences = useMemo(() => {
-    if (fingerprintData.mockSequencer || !report || !report.data) {
-      // Mock sequences
-      return fingerprintData.columns.map(col => {
-        const states = Array.from({ length: 60 }, (_, i) => {
-          const rand = Math.random();
-          if (rand < 0.05) return 'null';
-          if (rand < 0.1) return 'anomaly';
-          return 'ok';
-        });
-        return { columnName: col.name, states };
-      });
-    }
-
-    const maxRows = Math.min(60, report.data.length);
-    return fingerprintData.columns.map(col => {
-      const states = [];
-      for (let i = 0; i < maxRows; i++) {
-        const row = report.data[i];
-        const val = row[col.name];
-        
-        if (val === null || val === undefined || String(val) === "") {
-          states.push({ status: 'null', val: 'MISSING/NULL', idx: i });
-        } else if (row.is_anomaly && String(row.anomaly_reason).includes(col.name)) {
-          states.push({ status: 'anomaly', val, reason: row.anomaly_reason, idx: i });
-        } else {
-          states.push({ status: 'ok', val, idx: i });
-        }
-      }
-      return { columnName: col.name, states };
-    });
-  }, [fingerprintData, report]);
 
   // Generate column-level metrics for the heatmap matrix
   const columnMetrics = useMemo(() => {
@@ -609,143 +574,6 @@ export default function Homepage({ report, onNavigate, username }) {
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* Row-Level Digital DNA Sequencer */}
-      <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <div>
-            <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <Database size={16} className="text-primary" />
-              Column DNA Sequencer
-            </h3>
-            <p style={{ fontSize: '0.7rem', color: 'hsl(var(--text-muted))', marginTop: '0.15rem' }}>
-              Interactive matrix of the first 60 rows. Each block represents one data value. Hover to inspect.
-            </p>
-          </div>
-
-          {/* DNA Legend */}
-          <div style={{ display: 'flex', gap: '1rem', fontSize: '0.7rem', color: 'hsl(var(--text-secondary))' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-              <div style={{ width: '8px', height: '12px', backgroundColor: 'hsl(var(--success))', borderRadius: '1px' }} />
-              <span>Normal</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-              <div style={{ width: '8px', height: '12px', backgroundColor: 'hsl(var(--danger))', borderRadius: '1px' }} />
-              <span>Anomaly</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-              <div style={{ width: '8px', height: '12px', backgroundColor: 'hsl(var(--text-muted) / 0.2)', border: '1px solid hsl(var(--border-light))', borderRadius: '1px' }} />
-              <span>Null/Missing</span>
-            </div>
-          </div>
-        </div>
-
-        {/* DNA Sequencer Rows */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
-          {dnaSequences.map((seq, seqIdx) => (
-            <div key={seqIdx} style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: '700px' }}>
-              
-              {/* Column Label */}
-              <div style={{ width: '130px', flexShrink: 0, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'hsl(var(--text-primary))' }}>{seq.columnName}</span>
-                <div style={{ fontSize: '0.6rem', color: 'hsl(var(--text-muted))', marginTop: '0.05rem', textTransform: 'uppercase' }}>
-                  {report?.columns?.find(c => c.name === seq.columnName)?.type || 'Object'}
-                </div>
-              </div>
-
-              {/* DNA blocks ribbon */}
-              <div style={{ display: 'flex', gap: '2px', flexWrap: 'nowrap' }}>
-                {seq.states.map((cell, cellIdx) => {
-                  const status = cell.status || cell;
-                  const idx = cell.idx !== undefined ? cell.idx : cellIdx;
-                  const val = cell.val !== undefined ? cell.val : '';
-                  const reason = cell.reason || '';
-
-                  let bg = 'hsl(var(--success))';
-                  let shadow = 'none';
-                  if (status === 'null') {
-                    bg = 'hsl(var(--text-muted) / 0.15)';
-                  } else if (status === 'anomaly') {
-                    bg = 'hsl(var(--danger))';
-                    shadow = '0 0 6px hsl(var(--danger) / 0.6)';
-                  }
-
-                  return (
-                    <div
-                      key={cellIdx}
-                      onMouseEnter={() => setHoveredCell({
-                        column: seq.columnName,
-                        rowIndex: idx,
-                        val,
-                        status,
-                        reason
-                      })}
-                      onMouseLeave={() => setHoveredCell(null)}
-                      style={{
-                        width: '8px',
-                        height: '14px',
-                        backgroundColor: bg,
-                        boxShadow: shadow,
-                        borderRadius: '1px',
-                        cursor: 'pointer',
-                        transition: 'transform 0.15s ease',
-                        transform: hoveredCell?.column === seq.columnName && hoveredCell?.rowIndex === idx ? 'scale(1.3)' : 'none',
-                        zIndex: hoveredCell?.column === seq.columnName && hoveredCell?.rowIndex === idx ? 10 : 1
-                      }}
-                    />
-                  );
-                })}
-              </div>
-
-            </div>
-          ))}
-        </div>
-
-        {/* Interactive Cell Tooltip Area */}
-        <div style={{
-          minHeight: '60px',
-          padding: '0.75rem 1rem',
-          borderRadius: 'var(--radius-sm)',
-          backgroundColor: 'hsl(var(--bg-panel))',
-          border: '1px solid hsl(var(--border-light))',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.75rem',
-          transition: 'all 0.2s ease',
-          opacity: hoveredCell ? 1 : 0.65
-        }}>
-          {hoveredCell ? (
-            <div style={{ display: 'flex', gap: '1.5rem', width: '100%', flexWrap: 'wrap' }}>
-              <div>
-                <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', textTransform: 'uppercase', display: 'block' }}>COLUMN</span>
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'hsl(var(--primary))' }}>{hoveredCell.column}</span>
-              </div>
-              <div>
-                <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', textTransform: 'uppercase', display: 'block' }}>ROW INDEX</span>
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'hsl(var(--text-primary))' }}>#{hoveredCell.rowIndex}</span>
-              </div>
-              <div style={{ flex: 1, minWidth: '150px' }}>
-                <span style={{ fontSize: '0.65rem', color: 'hsl(var(--text-muted))', textTransform: 'uppercase', display: 'block' }}>VALUE</span>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: hoveredCell.status === 'null' ? 'hsl(var(--warning))' : 'hsl(var(--text-primary))' }}>
-                  {String(hoveredCell.val)}
-                </span>
-              </div>
-              {hoveredCell.status === 'anomaly' && (
-                <div style={{ flex: 2, minWidth: '200px' }}>
-                  <span style={{ fontSize: '0.65rem', color: 'hsl(var(--danger))', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>ANOMALY ALERT</span>
-                  <span style={{ fontSize: '0.75rem', color: 'hsl(var(--danger))', fontWeight: 600 }}>{hoveredCell.reason}</span>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'hsl(var(--text-muted))', fontSize: '0.75rem' }}>
-              <Award size={14} style={{ color: 'hsl(var(--primary))' }} />
-              <span>Hover over any DNA sequencer block above to examine the data point value and health alerts.</span>
-            </div>
-          )}
-        </div>
-
       </div>
 
     </div>

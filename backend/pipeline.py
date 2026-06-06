@@ -241,28 +241,65 @@ def clean_and_process_data(filepath_or_data):
 
     anomalies = []
     
-    # 1. Z-score anomaly detection for numerical columns (excluding rating)
+    # 1. Ensemble anomaly detection for numerical columns (excluding rating)
     numeric_cols = [col for col, t in col_types.items() if t == 'numeric' and col != 'rating']
     
-    for col in numeric_cols:
-        vals = [float(r[col]) for r in records]
-        n = len(vals)
-        if n > 1:
-            mean = sum(vals) / n
-            variance = sum((x - mean) ** 2 for x in vals) / (n - 1)
-            std_dev = math.sqrt(variance)
-            
-            if std_dev > 0:
-                for idx, r in enumerate(records):
-                    val = float(r[col])
-                    z_score = (val - mean) / std_dev
-                    if abs(z_score) > 3.0:
-                        r['is_anomaly'] = True
-                        reason = f"Outlier in {col}: value {val:.1f} (Z-score: {z_score:.1f})"
-                        if r['anomaly_reason']:
-                            r['anomaly_reason'] += f" | {reason}"
-                        else:
-                            r['anomaly_reason'] = reason
+    if numeric_cols and len(records) > 0:
+        import numpy as np
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.ensemble import IsolationForest
+        from sklearn.cluster import DBSCAN
+        from scipy import stats
+        
+        # Build X matrix
+        X = []
+        for r in records:
+            row_vals = []
+            for col in numeric_cols:
+                try:
+                    row_vals.append(float(r[col]))
+                except ValueError:
+                    row_vals.append(0.0)
+            X.append(row_vals)
+        X = np.array(X)
+        
+        # Preprocessing: Standard Scaler
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # Method A: Z-score
+        z = np.abs(stats.zscore(X_scaled, axis=0))
+        z = np.nan_to_num(z, nan=0.0)
+        z_flags = (z > 3.0).any(axis=1).astype(int)
+        
+        # Method B: Isolation Forest (contamination = 7%)
+        iso = IsolationForest(
+            n_estimators=100,
+            contamination=0.07,
+            max_samples="auto",
+            random_state=42
+        )
+        iso_preds = iso.fit_predict(X_scaled)
+        iso_flags = (iso_preds == -1).astype(int)
+        
+        # Method C: DBSCAN (eps = 0.8, min_samples = 8)
+        db = DBSCAN(eps=0.8, min_samples=8)
+        db_labels = db.fit_predict(X_scaled)
+        db_flags = (db_labels == -1).astype(int)
+        
+        # Ensemble Voting (agreed by >= 2 methods)
+        votes = z_flags + iso_flags + db_flags
+        confirmed_flags = (votes >= 2).astype(int)
+        
+        for idx, r in enumerate(records):
+            v = votes[idx]
+            if confirmed_flags[idx] == 1:
+                r['is_anomaly'] = True
+                methods = []
+                if z_flags[idx] == 1: methods.append("Z-score")
+                if iso_flags[idx] == 1: methods.append("Isolation Forest")
+                if db_flags[idx] == 1: methods.append("DBSCAN")
+                r['anomaly_reason'] = f"Ensemble outlier confirmed by {v}/3 methods ({', '.join(methods)})."
 
     # 2. Bounded rule check for rating
     if 'rating' in columns:

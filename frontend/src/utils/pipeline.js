@@ -229,25 +229,73 @@ export function cleanAndProcessData(recordsInput) {
   const anomalies = [];
   const numericCols = columns.filter(col => colTypes[col] === 'numeric' && col !== 'rating');
 
-  for (const col of numericCols) {
-    const vals = records.map(r => Number(r[col]));
-    const n = vals.length;
-    if (n > 1) {
-      const mean = vals.reduce((a, b) => a + b, 0) / n;
-      const variance = vals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (n - 1);
+  if (numericCols.length > 0 && records.length > 0) {
+    const n = records.length;
+    const d = numericCols.length;
+    
+    // Build feature matrix X
+    const X = [];
+    for (let i = 0; i < n; i++) {
+      const rowVals = [];
+      for (let j = 0; j < d; j++) {
+        const col = numericCols[j];
+        const val = Number(records[i][col]);
+        rowVals.push(isNaN(val) ? 0.0 : val);
+      }
+      X.push(rowVals);
+    }
+
+    // Standardize features (Z-score Scaling)
+    const means = [];
+    const stdDevs = [];
+    for (let j = 0; j < d; j++) {
+      const colVals = X.map(row => row[j]);
+      const mean = colVals.reduce((a, b) => a + b, 0) / n;
+      const variance = colVals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (n > 1 ? n - 1 : 1);
       const stdDev = Math.sqrt(variance);
-      
-      if (stdDev > 0) {
-        for (let idx = 0; idx < records.length; idx++) {
-          const r = records[idx];
-          const val = Number(r[col]);
-          const zScore = (val - mean) / stdDev;
-          if (Math.abs(zScore) > 3.0) {
-            r.is_anomaly = true;
-            const reason = `Outlier in ${col}: value ${val.toFixed(1)} (Z-score: ${zScore.toFixed(1)})`;
-            r.anomaly_reason = r.anomaly_reason ? `${r.anomaly_reason} | ${reason}` : reason;
-          }
+      means.push(mean);
+      stdDevs.push(stdDev);
+    }
+
+    const X_scaled = [];
+    for (let i = 0; i < n; i++) {
+      const scaledRow = [];
+      for (let j = 0; j < d; j++) {
+        const val = X[i][j];
+        const mean = means[j];
+        const stdDev = stdDevs[j];
+        scaledRow.push(stdDev > 0 ? (val - mean) / stdDev : 0.0);
+      }
+      X_scaled.push(scaledRow);
+    }
+
+    // Method A: Z-score detection flags
+    const zFlags = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < d; j++) {
+        if (Math.abs(X_scaled[i][j]) > 3.0) {
+          zFlags[i] = 1;
+          break;
         }
+      }
+    }
+
+    // Method B: Isolation Forest flags (contamination = 7%)
+    const isoFlags = runIsolationForest(X_scaled, 100, 0.07);
+
+    // Method C: DBSCAN flags (eps = 0.8, minSamples = 8)
+    const dbFlags = runDbscan(X_scaled, 0.8, 8);
+
+    // Ensemble Voting (agreed by >= 2 methods)
+    for (let i = 0; i < n; i++) {
+      const votes = zFlags[i] + isoFlags[i] + dbFlags[i];
+      if (votes >= 2) {
+        records[i].is_anomaly = true;
+        const methods = [];
+        if (zFlags[i] === 1) methods.push("Z-score");
+        if (isoFlags[i] === 1) methods.push("Isolation Forest");
+        if (dbFlags[i] === 1) methods.push("DBSCAN");
+        records[i].anomaly_reason = `Ensemble outlier confirmed by ${votes}/3 methods (${methods.join(', ')}).`;
       }
     }
   }
@@ -313,4 +361,184 @@ export function cleanAndProcessData(recordsInput) {
   };
 
   return { cleaned: records, report };
+}
+
+// ============================================================================
+// ENSEMBLE ANOMALY DETECTORS (PURE JAVASCRIPT IMPLEMENTATIONS)
+// ============================================================================
+
+function c_factor(n) {
+  if (n <= 1) return 0;
+  if (n === 2) return 1;
+  return 2 * (Math.log(n - 1) + 0.5772156649) - (2 * (n - 1)) / n;
+}
+
+class IsolationTree {
+  constructor() {
+    this.splitFeature = null;
+    this.splitValue = null;
+    this.left = null;
+    this.right = null;
+    this.size = 0;
+  }
+
+  fit(X, depth, maxDepth) {
+    this.size = X.length;
+    if (X.length <= 1 || depth >= maxDepth) {
+      return;
+    }
+
+    const numFeatures = X[0].length;
+    const fIdx = Math.floor(Math.random() * numFeatures);
+    this.splitFeature = fIdx;
+
+    let min = X[0][fIdx];
+    let max = X[0][fIdx];
+    for (let i = 1; i < X.length; i++) {
+      if (X[i][fIdx] < min) min = X[i][fIdx];
+      if (X[i][fIdx] > max) max = X[i][fIdx];
+    }
+
+    if (min === max) {
+      return;
+    }
+
+    const splitVal = min + Math.random() * (max - min);
+    this.splitValue = splitVal;
+
+    const leftX = [];
+    const rightX = [];
+    for (let i = 0; i < X.length; i++) {
+      if (X[i][fIdx] < splitVal) {
+        leftX.push(X[i]);
+      } else {
+        rightX.push(X[i]);
+      }
+    }
+
+    this.left = new IsolationTree();
+    this.left.fit(leftX, depth + 1, maxDepth);
+
+    this.right = new IsolationTree();
+    this.right.fit(rightX, depth + 1, maxDepth);
+  }
+
+  pathLength(x, currentDepth) {
+    if (this.left === null || this.right === null) {
+      return currentDepth + c_factor(this.size);
+    }
+    if (x[this.splitFeature] < this.splitValue) {
+      return this.left.pathLength(x, currentDepth + 1);
+    } else {
+      return this.right.pathLength(x, currentDepth + 1);
+    }
+  }
+}
+
+function runDbscan(X_scaled, eps = 0.8, minSamples = 8) {
+  const n = X_scaled.length;
+  if (n === 0) return new Array(0).fill(0);
+  const labels = new Array(n).fill(0); // 0 = unvisited
+  let clusterId = 0;
+
+  function getNeighbors(i) {
+    const neighbors = [];
+    const pi = X_scaled[i];
+    for (let j = 0; j < n; j++) {
+      const pj = X_scaled[j];
+      let distSq = 0;
+      for (let d = 0; d < pi.length; d++) {
+        distSq += Math.pow(pi[d] - pj[d], 2);
+      }
+      if (Math.sqrt(distSq) <= eps) {
+        neighbors.push(j);
+      }
+    }
+    return neighbors;
+  }
+
+  function expandCluster(i, neighbors, clusterId) {
+    labels[i] = clusterId;
+    const queue = [...neighbors];
+    for (let q = 0; q < queue.length; q++) {
+      const neighborIdx = queue[q];
+      if (labels[neighborIdx] === -1) {
+        labels[neighborIdx] = clusterId;
+      }
+      if (labels[neighborIdx] !== 0) continue;
+
+      labels[neighborIdx] = clusterId;
+      const nextNeighbors = getNeighbors(neighborIdx);
+      if (nextNeighbors.length >= minSamples) {
+        for (let nn = 0; nn < nextNeighbors.length; nn++) {
+          if (!queue.includes(nextNeighbors[nn])) {
+            queue.push(nextNeighbors[nn]);
+          }
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < n; i++) {
+    if (labels[i] !== 0) continue;
+
+    const neighbors = getNeighbors(i);
+    if (neighbors.length < minSamples) {
+      labels[i] = -1; // noise
+    } else {
+      clusterId++;
+      expandCluster(i, neighbors, clusterId);
+    }
+  }
+
+  return labels.map(l => (l === -1 ? 1 : 0));
+}
+
+function runIsolationForest(X_scaled, nEstimators = 100, contamination = 0.07) {
+  const n = X_scaled.length;
+  if (n === 0) return new Array(0).fill(0);
+  
+  const sampleSize = Math.min(256, n);
+  const maxDepth = Math.ceil(Math.log2(Math.max(2, sampleSize)));
+  const trees = [];
+
+  for (let i = 0; i < nEstimators; i++) {
+    const sample = [];
+    const indices = new Set();
+    while (indices.size < sampleSize) {
+      indices.add(Math.floor(Math.random() * n));
+    }
+    for (const idx of indices) {
+      sample.push(X_scaled[idx]);
+    }
+
+    const tree = new IsolationTree();
+    tree.fit(sample, 0, maxDepth);
+    trees.push(tree);
+  }
+
+  const scores = [];
+  const cVal = c_factor(sampleSize);
+  
+  for (let i = 0; i < n; i++) {
+    let totalPathLength = 0;
+    for (let t = 0; t < nEstimators; t++) {
+      totalPathLength += trees[t].pathLength(X_scaled[i], 0);
+    }
+    const avgPathLength = totalPathLength / nEstimators;
+    const score = cVal > 0 ? Math.pow(2, -avgPathLength / cVal) : 0.5;
+    scores.push({ idx: i, score });
+  }
+
+  const sorted = [...scores].sort((a, b) => b.score - a.score);
+  const cutoffIdx = Math.floor(n * contamination);
+  const flaggedIndices = new Set(sorted.slice(0, cutoffIdx).map(item => item.idx));
+
+  const flags = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    if (flaggedIndices.has(i)) {
+      flags[i] = 1;
+    }
+  }
+  return flags;
 }
