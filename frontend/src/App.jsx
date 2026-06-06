@@ -8,6 +8,7 @@ import InsightPanel from './components/InsightPanel';
 import QAChat from './components/QAChat';
 import LoginPage from './components/LoginPage';
 import DatasetComparator from './components/DatasetComparator';
+import Homepage from './components/Homepage';
 
 import { clearStagedData, getStagedData, saveStagedData } from './utils/supabaseClient';
 import { cleanAndProcessData } from './utils/pipeline';
@@ -25,7 +26,7 @@ export default function App() {
   });
 
   // Routing state
-  const [activePage, setActivePage] = useState('dashboard'); // 'dashboard' | 'compare'
+  const [activePage, setActivePage] = useState('home'); // 'home' | 'dashboard' | 'compare'
 
   // Pipeline status & states
   const [pipelineStatus, setPipelineStatus] = useState('idle'); 
@@ -61,6 +62,32 @@ export default function App() {
     }
     localStorage.setItem('smartstream_theme', theme);
   }, [theme]);
+
+  // Load staged data from database on mount or when user changes
+  useEffect(() => {
+    if (!currentUser) return;
+    
+    async function loadStaged() {
+      try {
+        const staged = await getStagedData(currentUser.username, 'A');
+        if (staged) {
+          if (staged.raw_stats) {
+            setRawStats(staged.raw_stats);
+          }
+          if (staged.report) {
+            setReport(staged.report);
+            setPipelineStatus('cleaned');
+          } else if (staged.raw_stats) {
+            setPipelineStatus('staged');
+          }
+        }
+      } catch (err) {
+        console.error("Error loading staged data on mount:", err);
+      }
+    }
+    
+    loadStaged();
+  }, [currentUser]);
 
   const handleLoginSuccess = (userData) => {
     setCurrentUser(userData);
@@ -187,7 +214,7 @@ export default function App() {
     <div className="app-container">
       {/* Top Banner Header */}
       <header className="app-header" style={{ paddingBottom: '0.6rem' }}>
-        <div style={{ cursor: 'pointer' }} onClick={() => setActivePage('dashboard')}>
+        <div style={{ cursor: 'pointer' }} onClick={() => setActivePage('home')}>
           <h1 className="app-title logo-animate" style={{ fontSize: '1.5rem' }}>
             <Activity size={22} className="logo-entrance-animate" style={{ color: 'hsl(var(--primary))' }} />
             SmartStream
@@ -196,24 +223,30 @@ export default function App() {
         </div>
         
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          {/* Page Router Button - Text Only */}
-          {activePage === 'dashboard' ? (
+          {/* Page Router Button Menu - Text Only */}
+          <div className="nav-menu" style={{ display: 'flex', gap: '0.4rem' }}>
+            <button 
+              onClick={() => setActivePage('home')} 
+              className={activePage === 'home' ? 'btn btn-primary' : 'btn btn-secondary'}
+              style={{ fontSize: '0.75rem', padding: '0.4rem 0.85rem' }}
+            >
+              Diagnostics Overview
+            </button>
+            <button 
+              onClick={() => setActivePage('dashboard')} 
+              className={activePage === 'dashboard' ? 'btn btn-primary' : 'btn btn-secondary'}
+              style={{ fontSize: '0.75rem', padding: '0.4rem 0.85rem' }}
+            >
+              Data Pipeline
+            </button>
             <button 
               onClick={() => setActivePage('compare')} 
-              className="btn btn-secondary"
+              className={activePage === 'compare' ? 'btn btn-primary' : 'btn btn-secondary'}
               style={{ fontSize: '0.75rem', padding: '0.4rem 0.85rem' }}
             >
               Compare Datasets
             </button>
-          ) : (
-            <button 
-              onClick={() => setActivePage('dashboard')} 
-              className="btn btn-secondary"
-              style={{ fontSize: '0.75rem', padding: '0.4rem 0.85rem' }}
-            >
-              Back to Dashboard
-            </button>
-          )}
+          </div>
 
           {/* Database logged in indicator */}
           <div style={{
@@ -298,7 +331,9 @@ export default function App() {
       </header>
 
       {/* Conditionally Render Pages */}
-      {activePage === 'dashboard' ? (
+      {activePage === 'home' ? (
+        <Homepage report={report} onNavigate={setActivePage} username={currentUser.username} />
+      ) : activePage === 'dashboard' ? (
         <main className="dashboard-grid">
           {/* Left Column: Data Loading, Cleaning & Schema */}
           <section className="sidebar-panel">
